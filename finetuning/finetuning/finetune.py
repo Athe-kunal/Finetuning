@@ -46,10 +46,12 @@ def run_finetune(model_name:str,dataset_name:Literal['bfcl','xlam'],json_or_yaml
         train_data = []
         with open('train.json', 'r') as file:
             for line in file:
-                train_data.append(json.loads(line.strip()))
+                json_obj = json.loads(line.strip())
+                json_obj['Functions'] = json_obj['Functions'][0] if isinstance(json_obj['Functions'],list) else json_obj['Functions']   
+                json_obj['Output'] = json_obj['Output'][0] if isinstance(json_obj['Output'],list) else json_obj['Output']
+                train_data.append(json_obj)
         with open('test.json', 'r') as file:
             test_data = json.load(file)
-        # train_data = _process_bfcl_train_data(train_data)
     
         train_ds = Dataset.from_list(train_data)
         train_ds = train_ds.map(functools.partial(_get_bfcl_tokenized_ds,tokenizer=tokenizer,json_or_yaml=json_or_yaml),batched=True)
@@ -97,9 +99,9 @@ def _get_bfcl_tokenized_ds(examples,tokenizer, json_or_yaml: Literal["json","yam
     prompts = []
     for up,fn, op in zip(user_prompts,functions, outputs):
         if json_or_yaml == "json":
-            fn = json.dumps(fn,indent=1)
+            fn = json.dumps(ast.literal_eval(fn),indent=1)
         elif json_or_yaml == "yaml":
-            fn = json_to_yaml(fn)
+            fn = json_to_yaml(f"[{fn}]")
         prompts.append(tokenizer.apply_chat_template(
             _create_messages(up,fn, op),
             tokenize=False
@@ -111,23 +113,8 @@ def json_to_yaml(data):
     curr_func_yaml = ""
     json_func = ast.literal_eval(data)
     for func in json_func:
-        curr_func_yaml+=yaml.dump(ast.literal_eval(func)) + "\n\n"
+        curr_func_yaml+=yaml.dump(func) + "\n\n"
     return curr_func_yaml
-    
-def _process_bfcl_train_data(train_data):
-    for td in train_data:
-        output = td['Output']
-        td['Functions'] = str(td['Functions'])
-        td['yaml_function'] = json_to_yaml(td['Functions'])
-        td['json_function'] = td['Functions'][1:-1]
-        del td['Functions']
-        
-        if isinstance(output,str):
-            pass
-        elif isinstance(output,list):
-            output = output[0]
-        td['Output'] = output
-    return train_data
 
 def process_ast_node(node):
     # Check if the node is a function call

@@ -1,1 +1,3 @@
 outputs/
+__pycache__/
+__mypy_cache__/
