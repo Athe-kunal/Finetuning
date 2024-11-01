@@ -10,10 +10,24 @@ import functools
 from trl import SFTTrainer
 from transformers import TrainingArguments, DataCollatorForSeq2Seq
 from unsloth import is_bfloat16_supported
+from typing import NamedTuple
+from tqdm import tqdm
+import wandb
+import os
+from dotenv import load_dotenv, find_dotenv
+import pandas as pd
 
-def run_finetune(model_name:str,dataset_name:Literal['bfcl','xlam'],json_or_yaml:Literal['json','yaml']):
-    
-    
+load_dotenv(find_dotenv(),override=True)
+wandb.login(key=os.getenv("WANDB_API_KEY"))
+
+class ModelReturn(NamedTuple):
+    model_answer:str
+    gt_answer:str
+    score: float
+
+def run_finetune(model_name:str,dataset_name:Literal['bfcl','xlam'],json_or_yaml:Literal['json','yaml']):    
+    run = wandb.init(project="JSON vs YAML Finetuning Project",entity="athe_kunal",group=f"{model_name}_{json_or_yaml}_{dataset_name}",name=f"{model_name}_{json_or_yaml}_{dataset_name}")
+
     dtype = torch.bfloat16 
     load_in_4bit = False 
 
@@ -54,8 +68,10 @@ def run_finetune(model_name:str,dataset_name:Literal['bfcl','xlam'],json_or_yaml
             test_data = json.load(file)
     
         train_ds = Dataset.from_list(train_data)
-        train_ds = train_ds.map(functools.partial(_get_bfcl_tokenized_ds,tokenizer=tokenizer,json_or_yaml=json_or_yaml),batched=True)
-    
+        train_ds = train_ds.map(functools.partial(_get_bfcl_train_tokenized_ds,tokenizer=tokenizer,json_or_yaml=json_or_yaml),batched=True)
+        test_ds = Dataset.from_list(test_data)
+        test_ds = test_ds.map(functools.partial(_get_bfcl_tokenized_test_ds,tokenizer=tokenizer,json_or_yaml=json_or_yaml),batched=True,remove_columns=["function","question"])
+
     trainer = SFTTrainer(
     model = model,
     tokenizer = tokenizer,
@@ -66,11 +82,12 @@ def run_finetune(model_name:str,dataset_name:Literal['bfcl','xlam'],json_or_yaml
     data_collator = DataCollatorForSeq2Seq(tokenizer = tokenizer),
     packing = False, # Can make training 5x faster for short sequences.
     args = TrainingArguments(
-        per_device_train_batch_size = 8,
+        per_device_train_batch_size = 32,
+        do_eval=True,
         gradient_accumulation_steps = 1,
         # warmup_steps = 5,
-        num_train_epochs = 3, # Set this for 1 full training run.
-        # max_steps = 10,
+        num_train_epochs = 1, # Set this for 1 full training run.
+        # max_steps = 1,
         learning_rate = 2e-4,
         fp16 = not is_bfloat16_supported(),
         bf16 = is_bfloat16_supported(),
@@ -80,7 +97,9 @@ def run_finetune(model_name:str,dataset_name:Literal['bfcl','xlam'],json_or_yaml
         lr_scheduler_type = "linear",
         seed = 3407,
         output_dir = f"outputs_{model_name}_{json_or_yaml}_{dataset_name}",
-        save_safetensors=True
+        save_safetensors=True,
+        report_to="wandb",
+        # run_name=f"{model_name}_{json_or_yaml}_{dataset_name}"
     ),
     )
     trainer = train_on_responses_only(
@@ -89,10 +108,79 @@ def run_finetune(model_name:str,dataset_name:Literal['bfcl','xlam'],json_or_yaml
         response_part = "<|start_header_id|>assistant<|end_header_id|>\n\n",
     )
     trainer_stats = trainer.train()
-    return trainer_stats, trainer, model, tokenizer
-    
+    model.save_pretrained(f"lora_32_model_{model_name}_{json_or_yaml}_{dataset_name}")
+    scores_returned = evaluation_loop(test_ds,model,tokenizer,32)
+    table_data = [[score.model_answer,score.gt_answer,score.score] for score in scores_returned]
+    run.log({"table_data":wandb.Table(data=table_data,columns=["Model Answer","GT Answer","Score"])})
+    return trainer_stats, trainer, model, tokenizer, scores_returned
 
-def _get_bfcl_tokenized_ds(examples,tokenizer, json_or_yaml: Literal["json","yaml"]):
+def evaluation_loop(test_ds:Dataset,model:FastLanguageModel,tokenizer,val_batch_size:int):
+    FastLanguageModel.for_inference(model) # Enable native 2x faster inference
+
+    scores:list[ModelReturn] = []
+    for start in tqdm(range(0,len(test_ds),val_batch_size)):
+        end = min(len(test_ds),start+val_batch_size)
+        batch = test_ds[start:end]
+        inputs = tokenizer(batch['prompt'], return_tensors = "pt",padding=True,truncation=True,).to("cuda:0")
+
+        model_outputs = model.generate(inputs['input_ids'],attention_mask = inputs['attention_mask'], max_new_tokens = 128, use_cache = True, do_sample = False)
+        str_outputs = tokenizer.batch_decode(model_outputs)
+        for model_answer,gt_answer in zip(str_outputs,batch['model_answer']):
+            model_processed_answer = process_model_answer(model_answer)
+            try:
+                score = evaluation(model_processed_answer,gt_answer)
+            except:
+                score = 0.0
+            if model_processed_answer == "":
+                model_processed_answer = model_answer
+            scores.append(ModelReturn(model_answer=model_processed_answer,gt_answer=gt_answer,score=score))
+    df = pd.DataFrame([{
+        'model_answer': s.model_answer,
+        'gt_answer': s.gt_answer,
+        'score': s.score
+    } for s in scores])
+    
+    # Save DataFrame to CSV
+    df.to_csv('evaluation_results.csv', index=False)
+    return scores
+
+def process_model_answer(out):
+    start_idx = out.rindex("<|end_header_id|>") + len("<|end_header_id|>")
+    end_idx = out.rindex("<|eot_id|>")
+    return out[start_idx:end_idx].strip()
+
+def evaluation(model_answer,gt_answer):
+    model_answer = parse_python_function_call(model_answer)
+    gt_answer = parse_python_function_call(gt_answer)
+
+    if model_answer['name'] != gt_answer['name']:
+        return 0.0
+    args_score = 0
+    for model_answer_arg,model_answer_val in model_answer['arguments'].items():
+        if model_answer_arg not in gt_answer['arguments'] or gt_answer['arguments'][model_answer_arg] != model_answer_val:
+            args_score+=0
+        else:
+            args_score+=1
+    return args_score/len(model_answer['arguments'])
+
+def _get_bfcl_tokenized_test_ds(examples,tokenizer,json_or_yaml: Literal["json","yaml"]):
+    user_prompts = examples['question']
+    functions = examples['function']
+    prompts = []
+    for up,fn in zip(user_prompts,functions):
+        fn = fn[0] if isinstance(fn,list) else fn
+        if json_or_yaml == "json":
+            fn = json.dumps(fn,indent=1)
+        elif json_or_yaml == "yaml":
+            fn = json_to_yaml(f"[{fn}]")
+        prompts.append(tokenizer.apply_chat_template(
+            _create_messages(up,fn, ""),
+            tokenize=False,
+            add_generation_prompt=True
+        ))
+    return {"prompt":prompts,}
+
+def _get_bfcl_train_tokenized_ds(examples,tokenizer, json_or_yaml: Literal["json","yaml"]):
     user_prompts = examples['Instruction']
     functions = examples['Functions']
     outputs = examples['Output']
@@ -117,36 +205,37 @@ def json_to_yaml(data):
     return curr_func_yaml
 
 def process_ast_node(node):
-    # Check if the node is a function call
-    if isinstance(node, ast.Call):
-        # Return a string representation of the function call
-        return ast.unparse(node) 
+    if isinstance(node, (ast.Constant, ast.Constant, ast.Constant)):
+        return node.value
+    elif isinstance(node, ast.List):
+        return [process_ast_node(elt) for elt in node.elts]
     else:
-        # Convert the node to source code and evaluate to get the value
-        node_str = ast.unparse(node)
-        return eval(node_str)
+        return ast.unparse(node)
 
       
 def parse_python_function_call(call_str):
     tree = ast.parse(call_str)
-    expr = tree.body[0]
+    expr = tree.body[0].value
 
-    call_node = expr.value
-    function_name = (
-        call_node.func.id
-        if isinstance(call_node.func, ast.Name)
-        else str(call_node.func)
-    )
+    def extract_function_name(node):
+        if isinstance(node, ast.Name):
+            return node.id
+        elif isinstance(node, ast.Attribute):
+            return f"{extract_function_name(node.value)}.{node.attr}"
+        else:
+            return ast.unparse(node)
+    # return expr
+    function_name = extract_function_name(expr.func)
 
     parameters = {}
     noNameParam = []
 
     # Process positional arguments
-    for arg in call_node.args:
+    for arg in expr.args:
         noNameParam.append(process_ast_node(arg))
 
     # Process keyword arguments
-    for kw in call_node.keywords:
+    for kw in expr.keywords:
         parameters[kw.arg] = process_ast_node(kw.value)
 
     if noNameParam:

@@ -1,3 +1,5 @@
 outputs/
 __pycache__/
-__mypy_cache__/
+.mypy_cache/
+.env
+wandb
