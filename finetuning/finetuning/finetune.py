@@ -162,7 +162,8 @@ def run_finetune(
             )
         }
     )
-    run.log({"accuracy": sum(scores_returned) / len(scores_returned)})
+    accuracy = sum([score.score for score in scores_returned]) / len(scores_returned)
+    run.log({"accuracy": accuracy})
     run.finish()
     return trainer_stats, trainer, model, tokenizer, scores_returned
 
