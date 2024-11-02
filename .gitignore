@@ -3,3 +3,6 @@ __pycache__/
 .mypy_cache/
 .env
 wandb
+lora_32_model_unsloth
+outputs_unsloth
+*.csv
