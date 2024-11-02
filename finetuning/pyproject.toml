@@ -15,7 +15,7 @@ bitsandbytes = "^0.44.0"
 xformers = "^0.0.28.post1"
 peft = "^0.13.0"
 accelerate = "^0.34.2"
-trl = "^0.11.1"
+trl = {git = "https://github.com/huggingface/trl.git"}
 pandas = "^2.2.3"
 matplotlib = "^3.9.2"
 seaborn = "^0.13.2"

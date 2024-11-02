@@ -167,6 +167,55 @@ def run_finetune(
     run.finish()
     return trainer_stats, trainer, model, tokenizer, scores_returned
 
+def run_evaluation(model_name:str,path:str,dataset_name:Literal["bfcl","xlam"],json_or_yaml:Literal["json","yaml"],val_batch_size:int=32):
+    
+    dtype = torch.bfloat16
+    load_in_4bit = False
+    
+    for checkpoint_path in os.listdir(path):
+        if checkpoint_path.startswith("checkpoint"):
+            run = wandb.init(
+                project="JSON vs YAML Finetuning Project",
+                entity="athe_kunal",
+                group=f"{model_name}_{json_or_yaml}_{dataset_name}",
+                name=f"{model_name}_{json_or_yaml}_{dataset_name}_{checkpoint_path}",
+            )
+            model_path = os.path.join(path,checkpoint_path)
+            model, tokenizer = FastLanguageModel.from_pretrained(
+                model_name=model_path,  # or choose "unsloth/Llama-3.2-1B"
+                # max_seq_length = max_seq_length,
+                dtype=dtype,
+                load_in_4bit=load_in_4bit,
+                trust_remote_code=True,
+            )
+            if dataset_name == "bfcl":
+                with open("test.json", "r") as file:
+                    test_data = json.load(file)
+                test_ds = Dataset.from_list(test_data)
+                test_ds = test_ds.map(
+                    functools.partial(
+                        _get_bfcl_tokenized_test_ds,
+                        tokenizer=tokenizer,
+                        json_or_yaml=json_or_yaml,
+                    ),
+                    batched=True,
+                )
+            FastLanguageModel.for_inference(model)
+            scores_returned = evaluation_loop(test_ds, model, tokenizer, val_batch_size)
+            table_data = [
+                [score.model_answer, score.gt_answer, score.score] for score in scores_returned
+            ]
+            run.log(
+                {
+                    "table_data": wandb.Table(
+                        data=table_data, columns=["Model Answer", "GT Answer", "Score"]
+                    )
+                }
+            )
+            accuracy = sum([score.score for score in scores_returned]) / len(scores_returned)
+            run.log({"accuracy": accuracy})
+            run.finish()
+            torch.cuda.empty_cache()
 
 def evaluation_loop(
     test_ds: Dataset, model: FastLanguageModel, tokenizer, val_batch_size: int
