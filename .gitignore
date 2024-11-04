@@ -6,3 +6,4 @@ wandb
 lora_32_model_unsloth
 outputs_unsloth
 *.csv
+xlam_data_*

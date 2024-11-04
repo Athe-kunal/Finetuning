@@ -6,7 +6,7 @@ from unsloth import FastLanguageModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
 from unsloth.chat_templates import get_chat_template, train_on_responses_only
-from datasets import Dataset
+from datasets import Dataset, DatasetDict
 import functools
 from trl import SFTTrainer
 from transformers import TrainingArguments, DataCollatorForSeq2Seq
@@ -118,6 +118,10 @@ def run_finetune(
             batched=True,
             remove_columns=["function", "question"],
         )
+    elif dataset_name == "xlam":
+        ds = DatasetDict.load_from_disk(f"xlam_data_{json_or_yaml}")['train']
+        split_ds = ds.train_test_split(test_size=1000,seed=42)
+        train_ds = split_ds['train']
     output_dir = f"outputs_{model_name}_{json_or_yaml}_{dataset_name}"
     peft_callback = PeftSavingCallback()
     peft_callback.output_dir = output_dir
@@ -193,7 +197,12 @@ def run_evaluation(
             batched=True,
             remove_columns=["function", "question"],    
         )
-    scores_returned = evaluation_loop(test_ds, model, tokenizer, val_batch_size)
+    elif dataset_name == "xlam":
+        ds = DatasetDict.load_from_disk(f"xlam_data_{json_or_yaml}")['train']
+        split_ds = ds.train_test_split(test_size=1000,seed=42)
+        test_ds = split_ds['test']
+        # test_ds = test_ds.select(range(10))
+    scores_returned = evaluation_loop(test_ds, model, tokenizer, val_batch_size, dataset_name)
     table_data = [
         [score.model_answer, score.gt_answer, score.score]
         for score in scores_returned
@@ -214,9 +223,10 @@ def run_evaluation(
 
 
 def evaluation_loop(
-    test_ds: Dataset, model: AutoModelForCausalLM, tokenizer, val_batch_size: int
+    test_ds: Dataset, model: AutoModelForCausalLM, tokenizer, val_batch_size: int,
+    dataset_name: Literal["bfcl", "xlam"]
 ):
-
+    answer_col = "model_answer" if dataset_name == "bfcl" else "answers"
     scores: list[ModelReturn] = []
     for start in tqdm(range(0, len(test_ds), val_batch_size)):
         end = min(len(test_ds), start + val_batch_size)
@@ -236,7 +246,7 @@ def evaluation_loop(
             do_sample=False,
         )
         str_outputs = tokenizer.batch_decode(model_outputs)
-        for model_answer, gt_answer in zip(str_outputs, batch["model_answer"]):
+        for model_answer, gt_answer in zip(str_outputs, batch[answer_col]):
             model_processed_answer = process_model_answer(model_answer)
             try:
                 score = evaluation(model_processed_answer, gt_answer)
@@ -330,14 +340,6 @@ def _get_bfcl_train_tokenized_ds(
     }
 
 
-def json_to_yaml(data):
-    curr_func_yaml = ""
-    json_func = ast.literal_eval(data)
-    for func in json_func:
-        curr_func_yaml += yaml.dump(func) + "\n\n"
-    return curr_func_yaml
-
-
 def process_ast_node(node):
     if isinstance(node, (ast.Constant, ast.Constant, ast.Constant)):
         return node.value
@@ -379,22 +381,124 @@ def parse_python_function_call(call_str):
     function_dict = {"name": function_name, "arguments": parameters}
     return function_dict
 
+def clean_string(s: str) -> str:
+    """
+    Cleans a string by encoding it to UTF-8 and replacing unencodable characters.
+    """
+    return s.encode('utf-8', errors='replace').decode('utf-8')
+
+def remove_malinformed_str(data):
+    data = data.replace("true", "True")
+    data = data.replace("false", "False")
+    data = data.replace("null", "None")
+    return data
+def process_xlam_data(example_list, json_or_yaml: Literal['json', 'yaml'],tokenizer):
+    prompts = []
+    queries = example_list['query']
+    answers = example_list['answers']
+    tools = example_list['tools']
+    
+    for i in range(len(queries)):
+        try:
+            try:
+                # Clean the query string
+                queries[i] = clean_string(queries[i])
+                
+                # Replace JSON literals with Python literals
+                
+                answers[i] = remove_malinformed_str(answers[i])
+                tools[i] = remove_malinformed_str(tools[i])
+                # Convert the first answer entry
+                answer = _convert_answer(ast.literal_eval(answers[i])[0])
+                answer = clean_string(answer)  # Clean the converted answer
+            except Exception as e:
+                print(f"Error processing answers[{i}]: {e}")
+                print("Error Content:", answers[i])
+                continue  # Skip to the next iteration if there's an error
+            
+            # Process tools based on the specified format
+            if json_or_yaml == 'json':
+                functions = json.dumps(ast.literal_eval(tools[i][1:-1]),indent=1)
+            elif json_or_yaml == 'yaml':
+                functions = json_to_yaml(tools[i])
+            functions = clean_string(functions)  # Clean the functions string
+            
+            # Create and clean the message
+            messages = _create_messages(queries[i], functions, answer)
+            messages = sanitize_messages(messages)  # Clean all message contents
+            
+            # Append the processed prompt
+            prompts.append(
+                tokenizer.apply_chat_template(messages, tokenize=False)
+            )
+        except (UnicodeEncodeError, UnicodeDecodeError) as e:
+            print(f"Unicode error at example {i}: {e}")
+            continue  # Skip examples that cause encoding errors
+    
+    return {"prompt": prompts}
+
+def _convert_answer(answer):
+    # Existing implementation
+    python_output = answer['name'] + "("
+    for k, v in answer['arguments'].items():
+        python_output += f"{k}={v},"
+    python_output = python_output[:-1]
+    python_output += ")"
+    return python_output 
+
+def json_to_yaml(data):
+    curr_func_yaml = ""
+    json_func = ast.literal_eval(data)
+    for func in json_func:
+        curr_func_yaml += yaml.dump(func) + "\n\n"
+    return curr_func_yaml
 
 def _create_messages(user_prompt: str, functions: str, output: str):
     messages = [
         {
             "role": "system",
-            "content": "You are an expert in composing functions. You are given a question and a set of possible functions."
-            " Based on the question, you will need to make one or more function/tool calls to achieve the purpose."
-            " If none of the function can be used, point it out. If the given question lacks the parameters required by the function, also point it out. You should only return the function call in tools call sections.\n",
+            "content": (
+                "You are an expert in composing functions. You are given a question and a set of possible functions."
+                " Based on the question, you will need to make one or more function/tool calls to achieve the purpose."
+                " If none of the functions can be used, point it out. If the given question lacks the parameters required by the function, also point it out."
+                " You should only return the function call in tools call sections.\n"
+            ),
         },
         {
             "role": "user",
-            "content": f"#### Question: {user_prompt}Here is a list of functions that you can invoke:\n{functions}. Should you decide to return the function call(s), NO other text MUST be included.\n#### Response:",
+            "content": (
+                f"#### Question: {user_prompt} "
+                f"Here is a list of functions in JSON or YAML format that you can invoke:\n{functions}. "
+                "Should you decide to return the function call(s), NO other text MUST be included.\n"
+                "#### Response:"
+            ),
         },
-        {"role": "assistant", "content": output},
+        {
+            "role": "assistant",
+            "content": output
+        }
     ]
     return messages
+
+def sanitize_messages(messages):
+    """
+    Sanitizes all 'content' fields in the messages to ensure they are UTF-8 compliant.
+    """
+    for message in messages:
+        if 'content' in message:
+            message['content'] = clean_string(message['content'])
+    return messages
+
+def build_xlam_dataset(json_or_yaml: Literal['json', 'yaml'],tokenizer):
+    from datasets import load_dataset
+    ds = load_dataset("Salesforce/xlam-function-calling-60k")
+    if json_or_yaml == 'json':
+        tokenized_ds = ds.map(functools.partial(process_xlam_data,tokenizer=tokenizer),batched=True,fn_kwargs={'json_or_yaml':'json'})
+    elif json_or_yaml == 'yaml':
+        tokenized_ds = ds.map(functools.partial(process_xlam_data,tokenizer=tokenizer),batched=True,fn_kwargs={'json_or_yaml':'yaml'})
+    tokenized_ds.save_to_disk(f"xlam_data_{json_or_yaml}")
+    return tokenized_ds
+        
 
 if __name__ == "__main__":
     fire.Fire(run_finetune)
