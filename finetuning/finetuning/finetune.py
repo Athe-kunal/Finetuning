@@ -3,6 +3,7 @@ import json
 import yaml
 import ast
 from unsloth import FastLanguageModel
+from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
 from unsloth.chat_templates import get_chat_template, train_on_responses_only
 from datasets import Dataset
@@ -16,6 +17,8 @@ import wandb
 import os
 from dotenv import load_dotenv, find_dotenv
 import pandas as pd
+from transformers.trainer_callback import TrainerCallback, TrainerState
+import fire
 
 load_dotenv(find_dotenv(), override=True)
 wandb.login(key=os.getenv("WANDB_API_KEY"))
@@ -26,18 +29,21 @@ class ModelReturn(NamedTuple):
     gt_answer: str
     score: float
 
+class PeftSavingCallback(TrainerCallback):
+    output_dir: str
+    def on_epoch_end(self, args, state, control, **kwargs):
+        peft_model_path = os.path.join(self.output_dir, f"epoch_{int(state.epoch)}")
+        kwargs["model"].save_pretrained(peft_model_path)
 
 def run_finetune(
     model_name: str,
     dataset_name: Literal["bfcl", "xlam"],
     json_or_yaml: Literal["json", "yaml"],
-    val_batch_size: int = 32,
 ):
-    run = wandb.init(
-        project="JSON vs YAML Finetuning Project",
-        entity="athe_kunal",
+    wandb.init(
+        project=os.getenv("WANDB_PROJECT"),
+        entity=os.getenv("WANDB_ENTITY"),
         group=f"{model_name}_{json_or_yaml}_{dataset_name}",
-        name=f"{model_name}_{json_or_yaml}_{dataset_name}",
     )
 
     dtype = torch.bfloat16
@@ -93,7 +99,6 @@ def run_finetune(
                 train_data.append(json_obj)
         with open("test.json", "r") as file:
             test_data = json.load(file)
-
         train_ds = Dataset.from_list(train_data)
         train_ds = train_ds.map(
             functools.partial(
@@ -114,6 +119,8 @@ def run_finetune(
             remove_columns=["function", "question"],
         )
     output_dir = f"outputs_{model_name}_{json_or_yaml}_{dataset_name}"
+    peft_callback = PeftSavingCallback()
+    peft_callback.output_dir = output_dir
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
@@ -123,12 +130,13 @@ def run_finetune(
         dataset_num_proc=8,
         data_collator=DataCollatorForSeq2Seq(tokenizer=tokenizer),
         packing=False,  # Can make training 5x faster for short sequences.
+        callbacks=[peft_callback],
         args=TrainingArguments(
             per_device_train_batch_size=32,
-            do_eval=True,
+            do_eval=False,
             gradient_accumulation_steps=1,
             # warmup_steps = 5,
-            num_train_epochs=1,  # Set this for 1 full training run.
+            num_train_epochs=3,  # Set this for 1 full training run.
             # max_steps=1,
             learning_rate=2e-4,
             fp16=not is_bfloat16_supported(),
@@ -141,7 +149,8 @@ def run_finetune(
             output_dir=output_dir,
             save_safetensors=True,
             report_to="wandb",
-            # run_name=f"{model_name}_{json_or_yaml}_{dataset_name}"
+            # save_strategy="epoch",
+            run_name=f"{model_name}_{json_or_yaml}_{dataset_name}",
         ),
     )
     trainer = train_on_responses_only(
@@ -150,10 +159,44 @@ def run_finetune(
         response_part="<|start_header_id|>assistant<|end_header_id|>\n\n",
     )
     trainer_stats = trainer.train()
-    model.save_pretrained(f"lora_32_model_{model_name}_{json_or_yaml}_{dataset_name}")
+    return output_dir
+
+
+def run_evaluation(
+    model_name: str,
+    model_path: str,
+    dataset_name: Literal["bfcl", "xlam"],
+    json_or_yaml: Literal["json", "yaml"],
+    val_batch_size: int = 32,
+):
+    child_path = model_path.split("/")[-1]
+    assert child_path.startswith("epoch")
+    dtype = torch.bfloat16
+    run = wandb.init(
+        project="JSON vs YAML Finetuning Project",
+        entity="athe_kunal",
+        group=f"{model_name}_{json_or_yaml}_{dataset_name}",
+        name=f"{model_name}_{json_or_yaml}_{dataset_name}_{child_path}",
+    )
+    model,tokenizer = FastLanguageModel.from_pretrained(model_path,dtype=dtype,load_in_4bit=False)
+    FastLanguageModel.for_inference(model)
+    if dataset_name == "bfcl":
+        with open("test.json", "r") as file:
+            test_data = json.load(file)
+        test_ds = Dataset.from_list(test_data)
+        test_ds = test_ds.map(
+            functools.partial(
+                _get_bfcl_tokenized_test_ds,
+                tokenizer=tokenizer,
+                json_or_yaml=json_or_yaml,
+            ),
+            batched=True,
+            remove_columns=["function", "question"],    
+        )
     scores_returned = evaluation_loop(test_ds, model, tokenizer, val_batch_size)
     table_data = [
-        [score.model_answer, score.gt_answer, score.score] for score in scores_returned
+        [score.model_answer, score.gt_answer, score.score]
+        for score in scores_returned
     ]
     run.log(
         {
@@ -162,65 +205,17 @@ def run_finetune(
             )
         }
     )
-    accuracy = sum([score.score for score in scores_returned]) / len(scores_returned)
+    accuracy = sum([score.score for score in scores_returned]) / len(
+        scores_returned
+    )
     run.log({"accuracy": accuracy})
     run.finish()
-    return trainer_stats, trainer, model, tokenizer, scores_returned
+    torch.cuda.empty_cache()
 
-def run_evaluation(model_name:str,path:str,dataset_name:Literal["bfcl","xlam"],json_or_yaml:Literal["json","yaml"],val_batch_size:int=32):
-    
-    dtype = torch.bfloat16
-    load_in_4bit = False
-    
-    for checkpoint_path in os.listdir(path):
-        if checkpoint_path.startswith("checkpoint"):
-            run = wandb.init(
-                project="JSON vs YAML Finetuning Project",
-                entity="athe_kunal",
-                group=f"{model_name}_{json_or_yaml}_{dataset_name}",
-                name=f"{model_name}_{json_or_yaml}_{dataset_name}_{checkpoint_path}",
-            )
-            model_path = os.path.join(path,checkpoint_path)
-            model, tokenizer = FastLanguageModel.from_pretrained(
-                model_name=model_path,  # or choose "unsloth/Llama-3.2-1B"
-                # max_seq_length = max_seq_length,
-                dtype=dtype,
-                load_in_4bit=load_in_4bit,
-                trust_remote_code=True,
-            )
-            if dataset_name == "bfcl":
-                with open("test.json", "r") as file:
-                    test_data = json.load(file)
-                test_ds = Dataset.from_list(test_data)
-                test_ds = test_ds.map(
-                    functools.partial(
-                        _get_bfcl_tokenized_test_ds,
-                        tokenizer=tokenizer,
-                        json_or_yaml=json_or_yaml,
-                    ),
-                    batched=True,
-                )
-            FastLanguageModel.for_inference(model)
-            scores_returned = evaluation_loop(test_ds, model, tokenizer, val_batch_size)
-            table_data = [
-                [score.model_answer, score.gt_answer, score.score] for score in scores_returned
-            ]
-            run.log(
-                {
-                    "table_data": wandb.Table(
-                        data=table_data, columns=["Model Answer", "GT Answer", "Score"]
-                    )
-                }
-            )
-            accuracy = sum([score.score for score in scores_returned]) / len(scores_returned)
-            run.log({"accuracy": accuracy})
-            run.finish()
-            torch.cuda.empty_cache()
 
 def evaluation_loop(
-    test_ds: Dataset, model: FastLanguageModel, tokenizer, val_batch_size: int
+    test_ds: Dataset, model: AutoModelForCausalLM, tokenizer, val_batch_size: int
 ):
-    FastLanguageModel.for_inference(model)  # Enable native 2x faster inference
 
     scores: list[ModelReturn] = []
     for start in tqdm(range(0, len(test_ds), val_batch_size)):
@@ -400,3 +395,6 @@ def _create_messages(user_prompt: str, functions: str, output: str):
         {"role": "assistant", "content": output},
     ]
     return messages
+
+if __name__ == "__main__":
+    fire.Fire(run_finetune)

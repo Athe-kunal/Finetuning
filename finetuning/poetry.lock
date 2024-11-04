@@ -3784,13 +3784,13 @@ files = [
 
 [[package]]
 name = "tyro"
-version = "0.8.11"
+version = "0.8.14"
 description = "Strongly typed, zero-effort CLI interfaces"
 optional = false
 python-versions = ">=3.7"
 files = [
-    {file = "tyro-0.8.11-py3-none-any.whl", hash = "sha256:0a8dd180e6afcd5df9d9f940b7e6225f67ceb348678d49df9df00a59576174fb"},
-    {file = "tyro-0.8.11.tar.gz", hash = "sha256:486e6ed6672df2222303877a39a498e8f0fc762cdb9deacac67320c44a8eba45"},
+    {file = "tyro-0.8.14-py3-none-any.whl", hash = "sha256:1904bffb0e4d5e16c5eb50c518c89a368a44d56405f79b316c58e1206c102e87"},
+    {file = "tyro-0.8.14.tar.gz", hash = "sha256:2516e34d21763575159459c3b15fe4a13472a2166dff32169c9d7aab70853058"},
 ]
 
 [package.dependencies]
@@ -3822,22 +3822,6 @@ optional = false
 python-versions = ">=3.9"
 files = []
 develop = false
-
-[package.dependencies]
-bitsandbytes = {version = ">=0.43.3", optional = true, markers = "extra == \"colab-new\""}
-datasets = {version = ">=2.16.0", optional = true, markers = "extra == \"colab-new\""}
-hf_transfer = {version = "*", optional = true, markers = "extra == \"colab-new\""}
-huggingface_hub = {version = "*", optional = true, markers = "extra == \"colab-new\""}
-numpy = {version = "*", optional = true, markers = "extra == \"colab-new\""}
-packaging = {version = "*", optional = true, markers = "extra == \"colab-new\""}
-protobuf = {version = "<4.0.0", optional = true, markers = "extra == \"colab-new\""}
-psutil = {version = "*", optional = true, markers = "extra == \"colab-new\""}
-sentencepiece = {version = ">=0.2.0", optional = true, markers = "extra == \"colab-new\""}
-tqdm = {version = "*", optional = true, markers = "extra == \"colab-new\""}
-transformers = {version = ">=4.44.2", optional = true, markers = "extra == \"colab-new\""}
-tyro = {version = "*", optional = true, markers = "extra == \"colab-new\""}
-unsloth_zoo = {version = "*", optional = true, markers = "extra == \"colab-new\""}
-wheel = {version = ">=0.42.0", optional = true, markers = "extra == \"colab-new\""}
 
 [package.extras]
 colab = ["unsloth[cu121]"]
@@ -3904,13 +3888,13 @@ resolved_reference = "a2f8db3e7341f983af5814a2c56f54fa29ee548d"
 
 [[package]]
 name = "unsloth-zoo"
-version = "2024.10.5"
+version = "2024.11.0"
 description = "Utils for Unsloth"
 optional = false
 python-versions = ">=3.9"
 files = [
-    {file = "unsloth_zoo-2024.10.5-py3-none-any.whl", hash = "sha256:bc4a64f5fbeda72acd46e9f97ee428e502e9daaf49b0b075d3d57956a08ca40d"},
-    {file = "unsloth_zoo-2024.10.5.tar.gz", hash = "sha256:e5d43bb77f00ad02b4932afcb3789e6b1e574b9a5bc207946188029225b8faf8"},
+    {file = "unsloth_zoo-2024.11.0-py3-none-any.whl", hash = "sha256:c94c33f195d9cda421262ad16b3a3cd23df6caa62619a0e775484165bb715d13"},
+    {file = "unsloth_zoo-2024.11.0.tar.gz", hash = "sha256:1fc8513f45a9da1e9fa2e1e3a8f5dd558e6dd758b23af5633f1ea2c0b3240231"},
 ]
 
 [package.dependencies]
@@ -4302,4 +4286,4 @@ multidict = ">=4.0"
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.10"
-content-hash = "06222be4dc7f29f34cff2d6c74353ad4ff936ca2e5c3e2e74868526c3060688d"
+content-hash = "8fc464efa18b627aa52fb7528dd859286f3600f2ab72a64dc770834380630fc4"
