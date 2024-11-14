@@ -23,7 +23,6 @@ import fire
 load_dotenv(find_dotenv(), override=True)
 wandb.login(key=os.getenv("WANDB_API_KEY"))
 
-
 class ModelReturn(NamedTuple):
     model_answer: str
     gt_answer: str
@@ -136,9 +135,9 @@ def run_finetune(
         packing=False,  # Can make training 5x faster for short sequences.
         callbacks=[peft_callback],
         args=TrainingArguments(
-            per_device_train_batch_size=32,
+            per_device_train_batch_size=8,
+            gradient_accumulation_steps=4,
             do_eval=False,
-            gradient_accumulation_steps=1,
             # warmup_steps = 5,
             num_train_epochs=3,  # Set this for 1 full training run.
             # max_steps=1,
@@ -183,6 +182,7 @@ def run_evaluation(
         name=f"{model_name}_{json_or_yaml}_{dataset_name}_{child_path}",
     )
     model,tokenizer = FastLanguageModel.from_pretrained(model_path,dtype=dtype,load_in_4bit=False)
+    tokenizer.padding_side = "left"
     FastLanguageModel.for_inference(model)
     if dataset_name == "bfcl":
         with open("test.json", "r") as file:
@@ -247,6 +247,8 @@ def evaluation_loop(
         )
         str_outputs = tokenizer.batch_decode(model_outputs)
         for model_answer, gt_answer in zip(str_outputs, batch[answer_col]):
+            if dataset_name == "xlam":
+                gt_answer = _convert_answer(ast.literal_eval(gt_answer)[0])
             model_processed_answer = process_model_answer(model_answer)
             try:
                 score = evaluation(model_processed_answer, gt_answer)
