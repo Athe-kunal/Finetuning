@@ -24,8 +24,8 @@ model, tokenizer = FastLanguageModel.from_pretrained(
         load_in_4bit=False,
         trust_remote_code=True,
 )
-build_xlam_dataset(json_or_yaml='json')
-build_xlam_dataset(json_or_yaml='yaml')
+build_xlam_dataset(json_or_yaml='json',tokenizer=tokenizer)
+build_xlam_dataset(json_or_yaml='yaml',tokenizer=tokenizer)
 ```
 
 Also, set environment variables for your wandb account:

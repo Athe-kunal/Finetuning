@@ -36,7 +36,7 @@ if __name__ == "__main__":
 
     # run_evaluation(model_path="outputs_unsloth/Llama-3.2-1B-Instruct_json_xlam/epoch_1", model_name=LLAMA_3_2_1B_INSTRUCT, json_or_yaml="json", dataset_name="xlam")
     # run_evaluation(model_path="outputs_unsloth/Llama-3.2-1B-Instruct_json_xlam/epoch_2", model_name=LLAMA_3_2_1B_INSTRUCT, json_or_yaml="json", dataset_name="xlam")
-    run_evaluation(model_path="outputs_unsloth/Llama-3.2-1B-Instruct_json_xlam/epoch_3", model_name=LLAMA_3_2_1B_INSTRUCT, json_or_yaml="json", dataset_name="xlam")
+    # run_evaluation(model_path="outputs_unsloth/Llama-3.2-1B-Instruct_json_xlam/epoch_3", model_name=LLAMA_3_2_1B_INSTRUCT, json_or_yaml="json", dataset_name="xlam")
 
     # run_evaluation(model_path="outputs_unsloth/Llama-3.2-1B-Instruct_yaml_xlam/epoch_1", model_name=LLAMA_3_2_1B_INSTRUCT, json_or_yaml="yaml", dataset_name="xlam")
     # run_evaluation(model_path="outputs_unsloth/Llama-3.2-1B-Instruct_yaml_xlam/epoch_2", model_name=LLAMA_3_2_1B_INSTRUCT, json_or_yaml="yaml", dataset_name="xlam")
