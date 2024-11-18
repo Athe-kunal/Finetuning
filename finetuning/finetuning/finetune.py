@@ -3,6 +3,7 @@ import json
 import yaml
 import ast
 from unsloth import FastLanguageModel
+import unsloth
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
 from unsloth.chat_templates import get_chat_template, train_on_responses_only
@@ -76,9 +77,10 @@ def run_finetune(
         use_rslora=False,  # We support rank stabilized LoRA
         loftq_config=None,  # And LoftQ
     )
+    chat_template = "mistral" if "mistral" in model_name else "llama-3.1"
     tokenizer = get_chat_template(
         tokenizer,
-        chat_template="llama-3.1",
+        chat_template=chat_template,
     )
     if dataset_name == "bfcl":
         train_data = []
@@ -156,11 +158,14 @@ def run_finetune(
             run_name=f"{model_name}_{json_or_yaml}_{dataset_name}",
         ),
     )
-    trainer = train_on_responses_only(
-        trainer,
-        instruction_part="<|start_header_id|>system<|end_header_id|>\n\n",
-        response_part="<|start_header_id|>assistant<|end_header_id|>\n\n",
-    )
+    if chat_template == "mistral":
+        pass
+    else:
+        trainer = train_on_responses_only(
+            trainer,
+            instruction_part="<|start_header_id|>system<|end_header_id|>\n\n",
+            response_part="<|start_header_id|>assistant<|end_header_id|>\n\n",
+        )
     trainer_stats = trainer.train()
     return output_dir
 
@@ -183,6 +188,7 @@ def run_evaluation(
     )
     model,tokenizer = FastLanguageModel.from_pretrained(model_path,dtype=dtype,load_in_4bit=False)
     tokenizer.padding_side = "left"
+    tokenizer.chat_template = unsloth.chat_templates.llama31_template
     FastLanguageModel.for_inference(model)
     if dataset_name == "bfcl":
         with open("test.json", "r") as file:
@@ -276,9 +282,12 @@ def evaluation_loop(
 
 
 def process_model_answer(out):
+    out = out.replace("<|eot_id|>","")
+    out = out.replace("<|end_of_text|>","")
+    out = out.replace("<|eot_id|><|start_header_id|>assistant","")
+    out = out.replace("<|start_header_id|>assistant","")
     start_idx = out.rindex("<|end_header_id|>") + len("<|end_header_id|>")
-    end_idx = out.rindex("<|eot_id|>")
-    return out[start_idx:end_idx].strip()
+    return out[start_idx:].strip()
 
 
 def evaluation(model_answer, gt_answer):
