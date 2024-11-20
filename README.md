@@ -1,5 +1,7 @@
 # FINETUNING JSON vs. YAML
 
+WANDB RUNS AND CHECKPOINTS ARE AVAILABLE [HERE](https://wandb.ai/athe_kunal/JSON%20vs%20YAML%20Finetuning%20Project?nw=nwuserathe_kunal)
+
 To get started, first install the dependencies:
 
 ```bash

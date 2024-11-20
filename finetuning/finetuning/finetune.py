@@ -39,7 +39,7 @@ def run_finetune(
     model_name: str,
     dataset_name: Literal["bfcl", "xlam"],
     json_or_yaml: Literal["json", "yaml"],
-):
+)->None:
     wandb.init(
         project=os.getenv("WANDB_PROJECT"),
         entity=os.getenv("WANDB_ENTITY"),
@@ -167,7 +167,6 @@ def run_finetune(
             response_part="<|start_header_id|>assistant<|end_header_id|>\n\n",
         )
     trainer_stats = trainer.train()
-    return output_dir
 
 
 def run_evaluation(
@@ -176,7 +175,7 @@ def run_evaluation(
     dataset_name: Literal["bfcl", "xlam"],
     json_or_yaml: Literal["json", "yaml"],
     val_batch_size: int = 32,
-):
+)->None:
     child_path = model_path.split("/")[-1]
     assert child_path.startswith("epoch")
     dtype = torch.bfloat16
@@ -229,9 +228,9 @@ def run_evaluation(
 
 
 def evaluation_loop(
-    test_ds: Dataset, model: AutoModelForCausalLM, tokenizer, val_batch_size: int,
+    test_ds: Dataset, model: AutoModelForCausalLM, tokenizer:AutoTokenizer, val_batch_size: int,
     dataset_name: Literal["bfcl", "xlam"]
-):
+)->list[ModelReturn]:
     answer_col = "model_answer" if dataset_name == "bfcl" else "answers"
     scores: list[ModelReturn] = []
     for start in tqdm(range(0, len(test_ds), val_batch_size)):
@@ -281,7 +280,7 @@ def evaluation_loop(
     return scores
 
 
-def process_model_answer(out):
+def process_model_answer(out:str)->str:
     out = out.replace("<|eot_id|>","")
     out = out.replace("<|end_of_text|>","")
     out = out.replace("<|eot_id|><|start_header_id|>assistant","")
@@ -290,7 +289,7 @@ def process_model_answer(out):
     return out[start_idx:].strip()
 
 
-def evaluation(model_answer, gt_answer):
+def evaluation(model_answer:str, gt_answer:str)->float:
     model_answer = parse_python_function_call(model_answer)
     gt_answer = parse_python_function_call(gt_answer)
 
@@ -309,8 +308,8 @@ def evaluation(model_answer, gt_answer):
 
 
 def _get_bfcl_tokenized_test_ds(
-    examples, tokenizer, json_or_yaml: Literal["json", "yaml"]
-):
+    examples:dict, tokenizer:AutoTokenizer, json_or_yaml: Literal["json", "yaml"]
+)->dict:
     user_prompts = examples["question"]
     functions = examples["function"]
     prompts = []
@@ -331,8 +330,8 @@ def _get_bfcl_tokenized_test_ds(
 
 
 def _get_bfcl_train_tokenized_ds(
-    examples, tokenizer, json_or_yaml: Literal["json", "yaml"]
-):
+    examples:dict, tokenizer:AutoTokenizer, json_or_yaml: Literal["json", "yaml"]
+)->dict:
     user_prompts = examples["Instruction"]
     functions = examples["Functions"]
     outputs = examples["Output"]
@@ -398,12 +397,12 @@ def clean_string(s: str) -> str:
     """
     return s.encode('utf-8', errors='replace').decode('utf-8')
 
-def remove_malinformed_str(data):
+def remove_malinformed_str(data:str)->str:
     data = data.replace("true", "True")
     data = data.replace("false", "False")
     data = data.replace("null", "None")
     return data
-def process_xlam_data(example_list, json_or_yaml: Literal['json', 'yaml'],tokenizer):
+def process_xlam_data(example_list:dict, json_or_yaml: Literal['json', 'yaml'],tokenizer:AutoTokenizer)->dict:
     prompts = []
     queries = example_list['query']
     answers = example_list['answers']
@@ -449,7 +448,6 @@ def process_xlam_data(example_list, json_or_yaml: Literal['json', 'yaml'],tokeni
     return {"prompt": prompts}
 
 def _convert_answer(answer):
-    # Existing implementation
     python_output = answer['name'] + "("
     for k, v in answer['arguments'].items():
         python_output += f"{k}={v},"
