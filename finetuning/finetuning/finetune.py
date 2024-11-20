@@ -24,22 +24,26 @@ import fire
 load_dotenv(find_dotenv(), override=True)
 wandb.login(key=os.getenv("WANDB_API_KEY"))
 
+
 class ModelReturn(NamedTuple):
     model_answer: str
     gt_answer: str
     score: float
 
+
 class PeftSavingCallback(TrainerCallback):
     output_dir: str
+
     def on_epoch_end(self, args, state, control, **kwargs):
         peft_model_path = os.path.join(self.output_dir, f"epoch_{int(state.epoch)}")
         kwargs["model"].save_pretrained(peft_model_path)
+
 
 def run_finetune(
     model_name: str,
     dataset_name: Literal["bfcl", "xlam"],
     json_or_yaml: Literal["json", "yaml"],
-)->None:
+) -> None:
     wandb.init(
         project=os.getenv("WANDB_PROJECT"),
         entity=os.getenv("WANDB_ENTITY"),
@@ -120,9 +124,9 @@ def run_finetune(
             remove_columns=["function", "question"],
         )
     elif dataset_name == "xlam":
-        ds = DatasetDict.load_from_disk(f"xlam_data_{json_or_yaml}")['train']
-        split_ds = ds.train_test_split(test_size=1000,seed=42)
-        train_ds = split_ds['train']
+        ds = DatasetDict.load_from_disk(f"xlam_data_{json_or_yaml}")["train"]
+        split_ds = ds.train_test_split(test_size=1000, seed=42)
+        train_ds = split_ds["train"]
     output_dir = f"outputs_{model_name}_{json_or_yaml}_{dataset_name}"
     peft_callback = PeftSavingCallback()
     peft_callback.output_dir = output_dir
@@ -175,7 +179,7 @@ def run_evaluation(
     dataset_name: Literal["bfcl", "xlam"],
     json_or_yaml: Literal["json", "yaml"],
     val_batch_size: int = 32,
-)->None:
+) -> None:
     child_path = model_path.split("/")[-1]
     assert child_path.startswith("epoch")
     dtype = torch.bfloat16
@@ -185,7 +189,9 @@ def run_evaluation(
         group=f"{model_name}_{json_or_yaml}_{dataset_name}",
         name=f"{model_name}_{json_or_yaml}_{dataset_name}_{child_path}",
     )
-    model,tokenizer = FastLanguageModel.from_pretrained(model_path,dtype=dtype,load_in_4bit=False)
+    model, tokenizer = FastLanguageModel.from_pretrained(
+        model_path, dtype=dtype, load_in_4bit=False
+    )
     tokenizer.padding_side = "left"
     tokenizer.chat_template = unsloth.chat_templates.llama31_template
     FastLanguageModel.for_inference(model)
@@ -200,17 +206,18 @@ def run_evaluation(
                 json_or_yaml=json_or_yaml,
             ),
             batched=True,
-            remove_columns=["function", "question"],    
+            remove_columns=["function", "question"],
         )
     elif dataset_name == "xlam":
-        ds = DatasetDict.load_from_disk(f"xlam_data_{json_or_yaml}")['train']
-        split_ds = ds.train_test_split(test_size=1000,seed=42)
-        test_ds = split_ds['test']
+        ds = DatasetDict.load_from_disk(f"xlam_data_{json_or_yaml}")["train"]
+        split_ds = ds.train_test_split(test_size=1000, seed=42)
+        test_ds = split_ds["test"]
         # test_ds = test_ds.select(range(10))
-    scores_returned = evaluation_loop(test_ds, model, tokenizer, val_batch_size, dataset_name)
+    scores_returned = evaluation_loop(
+        test_ds, model, tokenizer, val_batch_size, dataset_name
+    )
     table_data = [
-        [score.model_answer, score.gt_answer, score.score]
-        for score in scores_returned
+        [score.model_answer, score.gt_answer, score.score] for score in scores_returned
     ]
     run.log(
         {
@@ -219,18 +226,19 @@ def run_evaluation(
             )
         }
     )
-    accuracy = sum([score.score for score in scores_returned]) / len(
-        scores_returned
-    )
+    accuracy = sum([score.score for score in scores_returned]) / len(scores_returned)
     run.log({"accuracy": accuracy})
     run.finish()
     torch.cuda.empty_cache()
 
 
 def evaluation_loop(
-    test_ds: Dataset, model: AutoModelForCausalLM, tokenizer:AutoTokenizer, val_batch_size: int,
-    dataset_name: Literal["bfcl", "xlam"]
-)->list[ModelReturn]:
+    test_ds: Dataset,
+    model: AutoModelForCausalLM,
+    tokenizer: AutoTokenizer,
+    val_batch_size: int,
+    dataset_name: Literal["bfcl", "xlam"],
+) -> list[ModelReturn]:
     answer_col = "model_answer" if dataset_name == "bfcl" else "answers"
     scores: list[ModelReturn] = []
     for start in tqdm(range(0, len(test_ds), val_batch_size)):
@@ -280,16 +288,16 @@ def evaluation_loop(
     return scores
 
 
-def process_model_answer(out:str)->str:
-    out = out.replace("<|eot_id|>","")
-    out = out.replace("<|end_of_text|>","")
-    out = out.replace("<|eot_id|><|start_header_id|>assistant","")
-    out = out.replace("<|start_header_id|>assistant","")
+def process_model_answer(out: str) -> str:
+    out = out.replace("<|eot_id|>", "")
+    out = out.replace("<|end_of_text|>", "")
+    out = out.replace("<|eot_id|><|start_header_id|>assistant", "")
+    out = out.replace("<|start_header_id|>assistant", "")
     start_idx = out.rindex("<|end_header_id|>") + len("<|end_header_id|>")
     return out[start_idx:].strip()
 
 
-def evaluation(model_answer:str, gt_answer:str)->float:
+def evaluation(model_answer: str, gt_answer: str) -> float:
     model_answer = parse_python_function_call(model_answer)
     gt_answer = parse_python_function_call(gt_answer)
 
@@ -308,8 +316,8 @@ def evaluation(model_answer:str, gt_answer:str)->float:
 
 
 def _get_bfcl_tokenized_test_ds(
-    examples:dict, tokenizer:AutoTokenizer, json_or_yaml: Literal["json", "yaml"]
-)->dict:
+    examples: dict, tokenizer: AutoTokenizer, json_or_yaml: Literal["json", "yaml"]
+) -> dict:
     user_prompts = examples["question"]
     functions = examples["function"]
     prompts = []
@@ -330,8 +338,8 @@ def _get_bfcl_tokenized_test_ds(
 
 
 def _get_bfcl_train_tokenized_ds(
-    examples:dict, tokenizer:AutoTokenizer, json_or_yaml: Literal["json", "yaml"]
-)->dict:
+    examples: dict, tokenizer: AutoTokenizer, json_or_yaml: Literal["json", "yaml"]
+) -> dict:
     user_prompts = examples["Instruction"]
     functions = examples["Functions"]
     outputs = examples["Output"]
@@ -391,31 +399,37 @@ def parse_python_function_call(call_str):
     function_dict = {"name": function_name, "arguments": parameters}
     return function_dict
 
+
 def clean_string(s: str) -> str:
     """
     Cleans a string by encoding it to UTF-8 and replacing unencodable characters.
     """
-    return s.encode('utf-8', errors='replace').decode('utf-8')
+    return s.encode("utf-8", errors="replace").decode("utf-8")
 
-def remove_malinformed_str(data:str)->str:
+
+def remove_malinformed_str(data: str) -> str:
     data = data.replace("true", "True")
     data = data.replace("false", "False")
     data = data.replace("null", "None")
     return data
-def process_xlam_data(example_list:dict, json_or_yaml: Literal['json', 'yaml'],tokenizer:AutoTokenizer)->dict:
+
+
+def process_xlam_data(
+    example_list: dict, json_or_yaml: Literal["json", "yaml"], tokenizer: AutoTokenizer
+) -> dict:
     prompts = []
-    queries = example_list['query']
-    answers = example_list['answers']
-    tools = example_list['tools']
-    
+    queries = example_list["query"]
+    answers = example_list["answers"]
+    tools = example_list["tools"]
+
     for i in range(len(queries)):
         try:
             try:
                 # Clean the query string
                 queries[i] = clean_string(queries[i])
-                
+
                 # Replace JSON literals with Python literals
-                
+
                 answers[i] = remove_malinformed_str(answers[i])
                 tools[i] = remove_malinformed_str(tools[i])
                 # Convert the first answer entry
@@ -425,35 +439,35 @@ def process_xlam_data(example_list:dict, json_or_yaml: Literal['json', 'yaml'],t
                 print(f"Error processing answers[{i}]: {e}")
                 print("Error Content:", answers[i])
                 continue  # Skip to the next iteration if there's an error
-            
+
             # Process tools based on the specified format
-            if json_or_yaml == 'json':
-                functions = json.dumps(ast.literal_eval(tools[i][1:-1]),indent=1)
-            elif json_or_yaml == 'yaml':
+            if json_or_yaml == "json":
+                functions = json.dumps(ast.literal_eval(tools[i][1:-1]), indent=1)
+            elif json_or_yaml == "yaml":
                 functions = json_to_yaml(tools[i])
             functions = clean_string(functions)  # Clean the functions string
-            
+
             # Create and clean the message
             messages = _create_messages(queries[i], functions, answer)
             messages = sanitize_messages(messages)  # Clean all message contents
-            
+
             # Append the processed prompt
-            prompts.append(
-                tokenizer.apply_chat_template(messages, tokenize=False)
-            )
+            prompts.append(tokenizer.apply_chat_template(messages, tokenize=False))
         except (UnicodeEncodeError, UnicodeDecodeError) as e:
             print(f"Unicode error at example {i}: {e}")
             continue  # Skip examples that cause encoding errors
-    
+
     return {"prompt": prompts}
 
+
 def _convert_answer(answer):
-    python_output = answer['name'] + "("
-    for k, v in answer['arguments'].items():
+    python_output = answer["name"] + "("
+    for k, v in answer["arguments"].items():
         python_output += f"{k}={v},"
     python_output = python_output[:-1]
     python_output += ")"
-    return python_output 
+    return python_output
+
 
 def json_to_yaml(data):
     curr_func_yaml = ""
@@ -461,6 +475,7 @@ def json_to_yaml(data):
     for func in json_func:
         curr_func_yaml += yaml.dump(func) + "\n\n"
     return curr_func_yaml
+
 
 def _create_messages(user_prompt: str, functions: str, output: str):
     messages = [
@@ -482,32 +497,40 @@ def _create_messages(user_prompt: str, functions: str, output: str):
                 "#### Response:"
             ),
         },
-        {
-            "role": "assistant",
-            "content": output
-        }
+        {"role": "assistant", "content": output},
     ]
     return messages
+
 
 def sanitize_messages(messages):
     """
     Sanitizes all 'content' fields in the messages to ensure they are UTF-8 compliant.
     """
     for message in messages:
-        if 'content' in message:
-            message['content'] = clean_string(message['content'])
+        if "content" in message:
+            message["content"] = clean_string(message["content"])
     return messages
 
-def build_xlam_dataset(json_or_yaml: Literal['json', 'yaml'],tokenizer):
+
+def build_xlam_dataset(json_or_yaml: Literal["json", "yaml"], tokenizer):
     from datasets import load_dataset
+
     ds = load_dataset("Salesforce/xlam-function-calling-60k")
-    if json_or_yaml == 'json':
-        tokenized_ds = ds.map(functools.partial(process_xlam_data,tokenizer=tokenizer),batched=True,fn_kwargs={'json_or_yaml':'json'})
-    elif json_or_yaml == 'yaml':
-        tokenized_ds = ds.map(functools.partial(process_xlam_data,tokenizer=tokenizer),batched=True,fn_kwargs={'json_or_yaml':'yaml'})
+    if json_or_yaml == "json":
+        tokenized_ds = ds.map(
+            functools.partial(process_xlam_data, tokenizer=tokenizer),
+            batched=True,
+            fn_kwargs={"json_or_yaml": "json"},
+        )
+    elif json_or_yaml == "yaml":
+        tokenized_ds = ds.map(
+            functools.partial(process_xlam_data, tokenizer=tokenizer),
+            batched=True,
+            fn_kwargs={"json_or_yaml": "yaml"},
+        )
     tokenized_ds.save_to_disk(f"xlam_data_{json_or_yaml}")
     return tokenized_ds
-        
+
 
 if __name__ == "__main__":
     fire.Fire(run_finetune)
